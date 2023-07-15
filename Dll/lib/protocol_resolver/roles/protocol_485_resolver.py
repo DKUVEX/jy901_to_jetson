@@ -150,38 +150,38 @@ class Protocol485Resolver(IProtocolResolver):
 
     def get_data(self, datahex, deviceModel):
         """
-        结算数据
-        :param datahex: 原始始数据包
-        :param deviceModel: 设备模型
+        calculating the data
+        :param datahex: raw data
+        :param deviceModel: device model
         :return:
         """
-        tempReg = deviceModel.StartReadReg                                  # 起始寄存器
-        dlen = int(datahex[2] / 2)                                          # 寄存器个数
-        tempVals = []                                                       # 临时数组
-        for i in range(0, dlen):
-            tempIndex = 3 + i * 2                                           # 获取当前数据索引
-            tempVal = datahex[tempIndex] << 8 | datahex[tempIndex + 1]      # 数据转换
+        tempReg = deviceModel.StartReadReg                                  # init of register
+        dlen = int(datahex[2] / 2)                                          # num of registers
+        tempVals = []                                                       # temp array
+        
+        for i in range(dlen):
+            tempIndex = 3 + i * 2                                           # find the current index
+            tempVal = datahex[tempIndex] << 8 | datahex[tempIndex + 1]      # convert the data
             if tempReg == 0x2e:
-                deviceModel.setDeviceData("VersionNumber", tempVal)  # 设备模型温度赋值
+                deviceModel.setDeviceData("VersionNumber", tempVal)  # setting the version number for the device model
             elif (tempReg >= 0x30 and tempReg <= 0x33):
-                # 芯片时间
+                # computing time on sensor
                 tempVals.append(tempVal)
                 if tempReg == 0x33:
-                    _year = 2000 + (tempVals[0] & 0xff)    # 年
-                    _moth = ((tempVals[0] >> 8) & 0xff)    # 月
-                    _day = (tempVals[1] & 0xff)            # 日
-                    _hour = ((tempVals[1] >> 8) & 0xff)    # 时
-                    _minute = (tempVals[2] & 0xff)         # 分
-                    _second = ((tempVals[2] >> 8) & 0xff)  # 秒
-                    _millisecond = tempVals[3]             # 毫秒
-                    deviceModel.setDeviceData("Chiptime", str(_year) + "-" + str(_moth) + "-" + str(_day) + " " + str(_hour) + ":" + str(_minute) + ":" + str(_second) + "." + str(_millisecond))         # 设备模型芯片时间赋值
-                    tempVals = []                                           # 清除数据
+                    _year = 2000 + (tempVals[0] & 0xff)
+                    _month = ((tempVals[0] >> 8) & 0xff)
+                    _day = (tempVals[1] & 0xff)
+                    _hour = ((tempVals[1] >> 8) & 0xff)
+                    _minute = (tempVals[2] & 0xff)    
+                    _second = ((tempVals[2] >> 8) & 0xff)  
+                    _millisecond = tempVals[3]             
+                    deviceModel.setDeviceData("Chiptime", str(_year) + "-" + str(_month) + "-" + str(_day) + " " + str(_hour) + ":" + str(_minute) + ":" + str(_second) + "." + str(_millisecond))         # 设备模型芯片时间赋值
+                    tempVals = []                                           # resetting the data
             elif (tempReg >= 0x34 and tempReg <= 0x36):
-                # 加速度X Y Z
-                tempVal = tempVal / 32768.0 * self.accRange                 #加速度结算
+                # Acceleration on X Y and Z
+                tempVal = tempVal / 32768.0 * self.accRange     #converting the data
                 if tempVal >= self.accRange:
                     tempVal -= 2 * self.accRange
-                # 设备模型加速度赋值
                 tempVal = round(tempVal, 4)
                 if tempReg == 0x34:
                     deviceModel.setDeviceData("AccX", tempVal)
