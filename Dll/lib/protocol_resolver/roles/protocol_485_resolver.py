@@ -1,6 +1,8 @@
 # coding:UTF-8
 import time
 import datetime
+from itertools import count, islice
+
 from Dll.lib.protocol_resolver.interface.i_protocol_resolver import IProtocolResolver
 
 """
@@ -111,41 +113,49 @@ class Protocol485Resolver(IProtocolResolver):
     def get_readbytes(self, devid, regAddr, regCount):
         """
         获取读取的指令
-        :param devid: 设备ID
-        :param regAddr: 寄存器地址
-        :param regCount: 寄存器个数
+        :param devid: device ID
+        :param regAddr: register adress
+        :param regCount: num of reg to read
         :return:
         """
-        tempBytes = [None] * 8
-        tempBytes[0] = devid                            #设备ID
-        tempBytes[1] = 0x03                             #读取指令
-        tempBytes[2] = regAddr >> 8                     #寄存器起始位——高位
-        tempBytes[3] = regAddr & 0xff                   #寄存器起始位——低位
-        tempBytes[4] = regCount >> 8                    #寄存器个数——高位
-        tempBytes[5] = regCount & 0xff                  #寄存器个数——低位
-        tempCrc = self.get_crc(tempBytes, len(tempBytes)-2)   #获取CRC校验
-        tempBytes[6] = tempCrc >> 8                     #CRC校验——高位
-        tempBytes[7] = tempCrc & 0xff                   #CRC校验——低位
+
+        tempBytes = [
+            devid,
+            0x03,               #read command
+            regAddr >> 8,       #register start adress - high byte
+            regAddr & 0xff,     #register start adress - low byte
+            regCount >> 8,      #number of registers - high byte
+            regCount & 0xff,    #number of registers - low byte
+            0x00,               # to be replaced
+            0x00
+        ]
+        tempCrc = self.get_crc(tempBytes, len(tempBytes)-2)     #check CRC sum
+        tempBytes[6] = tempCrc >> 8                             #CRCsum - high byte
+        tempBytes[7] = tempCrc & 0xff                           #CRCsum - low byte
         return tempBytes
 
     def get_writebytes(self, devid, regAddr, sValue):
         """
-        获取写入的指令
-        :param devid: 设备ID
-        :param regAddr: 寄存器地址
-        :param sValue: 写入的值
+        write bytes to register
+        :param devid: device ID
+        :param regAddr: register adress
+        :param sValue: register value
         :return:
         """
-        tempBytes = [None] * 8
-        tempBytes[0] = devid                            #设备ID
-        tempBytes[1] = 0x06                             #写入指令
-        tempBytes[2] = regAddr >> 8                     #寄存器起始位——高位
-        tempBytes[3] = regAddr & 0xff                   #寄存器起始位——低位
-        tempBytes[4] = sValue >> 8                      #寄存器数值——高位
-        tempBytes[5] = sValue & 0xff                    #寄存器数值——低位
-        tempCrc = self.get_crc(tempBytes, len(tempBytes)-2)   #获取CRC校验
-        tempBytes[6] = tempCrc >> 8
-        tempBytes[7] = tempCrc & 0xff
+
+        tempBytes = [
+            devid,
+            0x06,               #read command
+            regAddr >> 8,       #register start adress - high byte
+            regAddr & 0xff,     #register start adress - low byte
+            sValue >> 8,        #reg value - high byte
+            sValue & 0xff,      #reg value - low byte
+            0x00,               # to be replaced
+            0x00
+        ]
+        tempCrc = self.get_crc(tempBytes, len(tempBytes)-2)     #check CRC sum
+        tempBytes[6] = tempCrc >> 8                             #CRCsum - high byte
+        tempBytes[7] = tempCrc & 0xff                           #CRCsum - low byte
         return tempBytes
 
     def get_data(self, datahex, deviceModel):
@@ -159,186 +169,159 @@ class Protocol485Resolver(IProtocolResolver):
         dlen = int(datahex[2] / 2)                                          # num of registers
         tempVals = []                                                       # temp array
         
-        for i in range(dlen):
-            tempIndex = 3 + i * 2                                           # find the current index
+
+        i = count(3, 2)
+        for _ in range(dlen):
+            tempIndex = next(i)                                           # find the current index
             tempVal = datahex[tempIndex] << 8 | datahex[tempIndex + 1]      # convert the data
+            
             if tempReg == 0x2e:
                 deviceModel.setDeviceData("VersionNumber", tempVal)  # setting the version number for the device model
-            elif (tempReg >= 0x30 and tempReg <= 0x33):
+                
+            elif 0x30 <= tempReg <= 0x33:
                 # computing time on sensor
                 tempVals.append(tempVal)
+
+                mask, shift_8 = 0xff, mask
+
                 if tempReg == 0x33:
-                    _year = 2000 + (tempVals[0] & 0xff)
-                    _month = ((tempVals[0] >> 8) & 0xff)
-                    _day = (tempVals[1] & 0xff)
-                    _hour = ((tempVals[1] >> 8) & 0xff)
+                    _year = 2000 + (tempVals[0] & mask)
+                    _month = ((tempVals[0] >> shift_8) & mask)
+                    _day = (tempVals[1] & mask)
+                    _hour = ((tempVals[1] >> shift_8) & mask)
                     _minute = (tempVals[2] & 0xff)    
-                    _second = ((tempVals[2] >> 8) & 0xff)  
+                    _second = ((tempVals[2] >> shift_8) & mask)  
                     _millisecond = tempVals[3]             
                     deviceModel.setDeviceData("Chiptime", str(_year) + "-" + str(_month) + "-" + str(_day) + " " + str(_hour) + ":" + str(_minute) + ":" + str(_second) + "." + str(_millisecond))         # 设备模型芯片时间赋值
                     tempVals = []                                           # resetting the data
-            elif (tempReg >= 0x34 and tempReg <= 0x36):
-                # Acceleration on X Y and Z
+            
+            elif 0x34 <= tempReg <= 0x36: 
+                # Acceleration on X Y and Z axis
                 tempVal = tempVal / 32768.0 * self.accRange     #converting the data
                 if tempVal >= self.accRange:
                     tempVal -= 2 * self.accRange
-                tempVal = round(tempVal, 4)
-                if tempReg == 0x34:
-                    deviceModel.setDeviceData("AccX", tempVal)
-                elif tempReg == 0x35:
-                    deviceModel.setDeviceData("AccY", tempVal)
-                else:
-                    deviceModel.setDeviceData("AccZ", tempVal)
+
+                deviceModel.setDeviceData("AccX" if tempReg == 0x34 else "AccY" if tempReg == 0x35 else "AccZ", round(tempVal, 4))
+
+
             elif tempReg == 0x40:
-                # 温度
-                Temperature = round(tempVal/100.0, 2)                       # 温度结算,并保留两位小数
-                deviceModel.setDeviceData("Temperature", Temperature)       # 设备模型温度赋值
-            elif (tempReg >= 0x37 and tempReg <= 0x39):
-                # 角速度X Y Z
-                tempVal = tempVal / 32768.0 * self.gyroRange                #角速度结算
+                Temperature = round(tempVal/100.0, 2)   # compute tempurature and round up to two decimal places
+                deviceModel.setDeviceData("Temperature", Temperature)
+            
+            elif 0x37 <= tempReg <= 0x39:
+                # Angular Velocity on X Y Z axis
+                tempVal = tempVal / 32768.0 * self.gyroRange
                 if tempVal >= self.gyroRange:
                     tempVal -= 2 * self.gyroRange
-                # 角速度X Y Z赋值
-                tempVal = round(tempVal, 4)
-                # 设备模型角速度赋值
-                if tempReg == 0x37:
-                    deviceModel.setDeviceData("GyroX", tempVal)
-                elif tempReg == 0x38:
-                    deviceModel.setDeviceData("GyroY", tempVal)
-                else:
-                    deviceModel.setDeviceData("GyroZ", tempVal)
-            elif (tempReg >= 0x3d and tempReg <= 0x3f):
-                # 角度X Y Z
-                tempVal = tempVal / 32768.0 * self.angleRange                  #角度结算
+
+                deviceModel.setDeviceData("GyroX" if tempReg == 0x37 else "GyroY" if tempReg == 0x38 else "GyroZ", round(tempVal, 4))
+
+            elif 0x3d <= tempReg <= 0x3f:
+                # Angle Orientation Roll Pitch Yaw(X Y and Z)
+                tempVal = tempVal / 32768.0 * self.angleRange
                 if tempVal >= self.angleRange:
                     tempVal -= 2 * self.angleRange
-                # 设备模型角度X Y Z赋值
-                tempVal = round(tempVal, 3)
-                # 设备模型角度X赋值
-                if tempReg == 0x3d:
-                    deviceModel.setDeviceData("AngleX", tempVal)
-                elif tempReg == 0x3e:
-                    deviceModel.setDeviceData("AngleY", tempVal)
-                else:
-                    deviceModel.setDeviceData("AngleZ", tempVal)
-            elif (tempReg >= 0x3a and tempReg <= 0x3c):
-                # 磁场X Y Z
-                # 设备模型磁场赋值
-                if tempReg == 0x3a:
-                    deviceModel.setDeviceData("MagX", tempVal)
-                elif tempReg == 0x3b:
-                    deviceModel.setDeviceData("MagY", tempVal)
-                else:
-                    deviceModel.setDeviceData("MagZ", tempVal)
-            elif (tempReg >= 0x41 and tempReg <= 0x44):
-                # 端口
-                # 设备模型端口赋值
-                if tempReg == 0x41:
-                    deviceModel.setDeviceData("D0", tempVal)
-                elif tempReg == 0x42:
-                    deviceModel.setDeviceData("D1", tempVal)
-                elif tempReg == 0x43:
-                    deviceModel.setDeviceData("D2", tempVal)
-                else:
-                    deviceModel.setDeviceData("D3", tempVal)
-            elif (tempReg == 0x49 or tempReg == 0x4b):
-                # 经纬度
-                # 设备模型经纬度赋值
+
+                deviceModel.setDeviceData("AngleX" if tempReg == 0x3d else "AngleY" if tempReg == 0x3e else "AngleZ", round(tempVal, 3))
+
+            elif 0x3a <= tempReg <= 0x3c:
+
+                deviceModel.setDeviceData("MagX" if tempReg == 0x3a else "MagY" if tempReg == 0x3b else "MagZ", tempVal)
+
+            elif 0x41 <= tempReg <= 0x44:
+
+                deviceModel.setDeviceData("D0" if tempReg == 0x41 else "D1" if tempReg == 0x42 else "D2" if tempReg == 0x43 else "D3", tempVal)
+
+
+            elif tempReg in (0x49, 0x4b):
+                #Lon and Lat calculation
                 if tempReg == 0x49:
                     lon = deviceModel.get_unint(bytes([datahex[tempIndex+1], datahex[tempIndex], datahex[tempIndex+3], datahex[tempIndex+2]]))
                     tlon = lon / 10000000.0
-                    deviceModel.setDeviceData("Lon", round(tlon, 8))  # 设备模型经度赋值
+                    deviceModel.setDeviceData("Lon", round(tlon, 8))
                 elif tempReg == 0x4b:
                     lat = deviceModel.get_unint(bytes([datahex[tempIndex+1], datahex[tempIndex], datahex[tempIndex+3], datahex[tempIndex+2]]))
                     tlat = lat / 10000000.0
-                    deviceModel.setDeviceData("Lat", round(tlat, 8))  # 设备模型纬度赋值
-            elif (tempReg == 0x45 or tempReg == 0x47):
-                # 气压和高度
-                # 设备模型气压和高度赋值
+                    deviceModel.setDeviceData("Lat", round(tlat, 8))
+
+
+            elif tempReg in (0x45, 0x47):
+                #Press/Height computation
                 if tempReg == 0x45:
                     Pressure = deviceModel.get_unint(bytes([datahex[tempIndex+1], datahex[tempIndex], datahex[tempIndex+3], datahex[tempIndex+2]]))
                     deviceModel.setDeviceData("Pressure", round(Pressure, 0))
                 elif tempReg == 0x47:
                     Height = deviceModel.get_unint(bytes([datahex[tempIndex+1], datahex[tempIndex], datahex[tempIndex+3], datahex[tempIndex+2]]))
                     deviceModel.setDeviceData("Height", round(Height, 2))
-            elif (tempReg >= 0x4d and tempReg <= 0x4f):
+
+
+            elif 0x4d <= tempReg <= 0x4f:#(tempReg >= 0x4d and tempReg <= 0x4f)
                 # GPS
                 if tempReg == 0x4d:
-                    # 高度
                     Height = tempVal / 10.0
                     deviceModel.setDeviceData("GPSHeight", round(Height, 1))
                 elif tempReg == 0x4e:
-                    # 航向角
                     Yaw = tempVal / 100.0
                     deviceModel.setDeviceData("GPSYaw", round(Yaw, 2))
                 elif tempReg == 0x4f:
-                    # 地速  #海里
                     Speed = deviceModel.get_unint(bytes([datahex[tempIndex+1], datahex[tempIndex], datahex[tempIndex+3], datahex[tempIndex+2]])) / 1e3
-                    deviceModel.setDeviceData("GPSV", round(Speed, 3))   # 设备模型速度赋值
-            elif (tempReg >= 0x51 and tempReg <= 0x54):
-                # 四元素
-                tempVal = tempVal / 32768.0
-                # 设备模型元素赋值
-                if tempReg == 0x51:
-                    deviceModel.setDeviceData("Q0", round(tempVal, 5))
-                elif tempReg == 0x52:
-                    deviceModel.setDeviceData("Q1", round(tempVal, 5))
-                elif tempReg == 0x53:
-                    deviceModel.setDeviceData("Q2", round(tempVal, 5))
-                else:
-                    deviceModel.setDeviceData("Q3", round(tempVal, 5))
-            elif (tempReg >= 0x55 and tempReg <= 0x58):
-                # 定位精度
-                # 定位精度赋值:卫星数、位置精度、水平精度、垂直精度
+                    deviceModel.setDeviceData("GPSV", round(Speed, 3))
+
+            elif 0x51 <= tempReg <= 0x54:
+                tempVal /= 32768.0
+                deviceModel.setDeviceData("Q0" if tempReg == 0x51 else "Q1" if tempReg == 0x52 else "Q2" if tempReg == 0x53 else "Q3", round(tempVal, 5))
+            
+            elif 0x55 <= tempReg <= 0x58:
                 if tempReg == 0x55:
-                    SVNUM = tempVal
-                    deviceModel.setDeviceData("SVNUM", round(SVNUM, 0))
+                    #SVNUM = tempVal
+                    deviceModel.setDeviceData("SVNUM", round(tempVal, 0))
                 elif tempReg == 0x56:
-                    PDOP = tempVal / 100.0
-                    deviceModel.setDeviceData("PDOP", round(PDOP, 2))
+                    #PDOP = tempVal / 100.0
+                    deviceModel.setDeviceData("PDOP", round(tempVal / 100.0, 2))
                 elif tempReg == 0x57:
-                    HDOP = tempVal / 100.0
-                    deviceModel.setDeviceData("HDOP", round(HDOP, 2))
+                    #HDOP = tempVal / 100.0
+                    deviceModel.setDeviceData("HDOP", round(tempVal / 100.0, 2))
                 else:
-                    VDOP = tempVal / 100.0
-                    deviceModel.setDeviceData("VDOP", round(VDOP, 2))
-            # 下一个寄存器
+                    #VDOP = tempVal / 100.0
+                    deviceModel.setDeviceData("VDOP", round(tempVal / 100.0, 2))
+            
             tempReg += 1
 
     def readReg(self, regAddr, regCount, waitTime, deviceModel):
         """
-        读取寄存器
-        :param regAddr: 寄存器地址
-        :param regCount: 寄存器个数
-        :param deviceModel: 设备模型
+        Read registers
+        :param regAddr: register Adress
+        :param regCount: number of registers to read
+        :param deviceModel: Device Model
         :return:
         """
+
         bret = False
-        self.TempFindValues = []                        #清除数据
+        self.TempFindValues = []                        #reset data
         self.TempReadRegCount = regCount
-        tempBytes = self.get_readbytes(deviceModel.ADDR, regAddr, regCount)         # 获取读取的指令
+        tempBytes = self.get_readbytes(deviceModel.ADDR, regAddr, regCount)         # call the readbytes comm
         success_bytes = self.sendData(tempBytes, deviceModel)   # 写入数据
         if waitTime > 0:
-            for i in range(0, 100): # 设置超时1秒
-                time.sleep(0.05)  # 休眠50毫秒
-                if len(self.TempFindValues) >= regCount:  # 已返回所找查的寄存器的值
+            for i in range(0, 100): # timeout set to 1se
+                time.sleep(0.05)  # wait for 50 ms
+                if len(self.TempFindValues) >= regCount:  # return ofvalues of requested reg adress has been successful
                     bret = True
                     break
-                # 超出等待时间
+                # waiting time exceeded
                 if waitTime < i * 0.05 * 1000:
                     break
         return bret
 
     def writeReg(self, regAddr,sValue, deviceModel):
         """
-        写入寄存器
-        :param regAddr: 寄存器地址
-        :param sValue: 写入值
-        :param deviceModel: 设备模型
+        Writing to register
+        :param regAddr: register adress
+        :param sValue: value
+        :param deviceModel: device model
         :return:
         """
-        tempBytes = self.get_writebytes(deviceModel.ADDR, regAddr, sValue) #获取写入指令
-        success_bytes = deviceModel.serialPort.write(tempBytes)          #写入寄存器
+        tempBytes = self.get_writebytes(deviceModel.ADDR, regAddr, sValue) #writing the bytes
+        success_bytes = deviceModel.serialPort.write(tempBytes)
 
     def get_find(self, datahex, deviceModel):
         """
