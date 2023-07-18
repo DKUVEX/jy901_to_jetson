@@ -15,7 +15,7 @@ conda activate <EnvName>
 2. Install pyserial:
 
 ```
-pip install pyserial
+conda install pyserial
 ```
 
 3. Run the main.py using sudo(make sure to include the whole path):
